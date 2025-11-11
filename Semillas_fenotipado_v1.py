@@ -385,7 +385,9 @@ def process_image(
         volume_px3 = estimate_volume_ellipsoid(maj_px, min_px, c_px) if np.isfinite(c_px) else np.nan
 
 
-        # Convex hull métricas (área, perímetro, ejes, circularidad, elongación, etc.)
+
+        # Encontrar contornos antes de usar cnts
+        cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         convex_area_cv = np.nan
         convex_perim_cv = np.nan
         maj_px_hull = np.nan
