@@ -412,7 +412,7 @@ def process_image(
             cv2.drawContours(overlay, [box], 0, (0,255,255), 2)
             # Bounding rect (rectángulo alineado a ejes) expandido
             x_b, y_b, w_b, h_b = cv2.boundingRect(cnts[0])
-            margin = 30  # píxeles de margen extra
+            margin = 10  # píxeles de margen extra
             x0 = max(x_b - margin, 0)
             y0 = max(y_b - margin, 0)
             x1 = min(x_b + w_b + margin, overlay.shape[1])
