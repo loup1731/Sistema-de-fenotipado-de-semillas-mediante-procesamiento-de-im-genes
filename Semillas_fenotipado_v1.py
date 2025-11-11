@@ -410,9 +410,14 @@ def process_image(
             box = cv2.boxPoints(rect)
             box = np.intp(box)
             cv2.drawContours(overlay, [box], 0, (0,255,255), 2)
-            # Bounding rect (rectángulo alineado a ejes)
+            # Bounding rect (rectángulo alineado a ejes) expandido
             x_b, y_b, w_b, h_b = cv2.boundingRect(cnts[0])
-            cv2.rectangle(overlay, (x_b, y_b), (x_b + w_b, y_b + h_b), (255,128,0), 2)
+            margin = 10  # píxeles de margen extra
+            x0 = max(x_b - margin, 0)
+            y0 = max(y_b - margin, 0)
+            x1 = min(x_b + w_b + margin, overlay.shape[1])
+            y1 = min(y_b + h_b + margin, overlay.shape[0])
+            cv2.rectangle(overlay, (x0, y0), (x1, y1), (255,128,0), 2)
         y, x = map(int, region.centroid)
         cv2.putText(overlay, f"#{i}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2, cv2.LINE_AA)
 
