@@ -476,7 +476,17 @@ def process_image(
             x1 = min(x_b + w_b + bounding_rect_margin, bgr.shape[1])
             y1 = min(y_b + h_b + bounding_rect_margin, bgr.shape[0])
             crop = bgr[y0:y1, x0:x1]
+            # Guardar como PNG (8 bits)
             cv2.imwrite(os.path.join(crop_dir, f"seed_{i:02d}.png"), crop)
+            # Guardar como TIFF 16-bit sin compresión (o LZW si se puede)
+            import imageio
+            crop_16 = np.left_shift(crop.astype(np.uint16), 8)  # Escalar 8->16 bits
+            tiff_path = os.path.join(crop_dir, f"seed_{i:02d}.tiff")
+            try:
+                imageio.imwrite(tiff_path, crop_16, format='TIFF', compression='none')
+            except TypeError:
+                # Si 'compression' no es soportado, guardar sin ese argumento
+                imageio.imwrite(tiff_path, crop_16, format='TIFF')
 
     df = pd.DataFrame(rows)
     if save_overlay:
