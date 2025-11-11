@@ -570,7 +570,7 @@ def _in_ipython():
 if __name__ == "__main__":
     if _in_ipython():
         # ===== MODO SPYDER =====
-        RUN_MODE = "dataset"     # "image" o "dataset"
+        RUN_MODE = "image"     # "image" o "dataset"
 
         common_kw = dict(
             thickness_px=60, thickness_ratio=None,
