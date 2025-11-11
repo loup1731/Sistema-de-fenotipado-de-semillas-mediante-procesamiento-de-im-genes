@@ -577,10 +577,10 @@ if __name__ == "__main__":
             spot_sigma=2.0, spot_thresh=0.06,
             roi_frac=1.10, roi_band_px=20,
             th_mode="hsv_adaptive",
-            blockSize=51, C=0, adaptive_method="gaussian",
+            blockSize=71, C=0, adaptive_method="gaussian",
             hsv_S_min=28, hsv_V_min=90, hsv_V_max=245,
             fusion_mode="and",
-            min_obj=2000, min_hole=800, closing_disk=0,
+            min_obj=4000, min_hole=100, closing_disk=3,
             save_crops=True,
             save_masks=True
         )
