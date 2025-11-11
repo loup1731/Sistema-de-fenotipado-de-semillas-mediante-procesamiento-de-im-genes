@@ -1,3 +1,64 @@
+# --------- Reporte de rendimiento por carpeta ---------
+def reporte_rendimiento(dataset_dir, pattern="features_*.csv", semillas_esperadas_por_carpeta=10, margen_exito=0):
+    """
+    Genera un reporte de rendimiento del algoritmo por carpeta y global:
+    - Conteo de semillas detectadas vs. esperadas
+    - Estadísticas de área y forma (media, std, min, max)
+    - Tasa de éxito por carpeta (conteo correcto o dentro de margen)
+    - Detección de posibles outliers (área muy baja/alta)
+    """
+    import numpy as np
+    subdirs = sorted([d for d in glob.glob(os.path.join(dataset_dir, "*")) if os.path.isdir(d)])
+    total_detectadas = 0
+    total_esperadas = 0
+    total_exitos = 0
+    total_imgs = 0
+    resumen = []
+    areas_global = []
+    for d in subdirs:
+        csvs = sorted(glob.glob(os.path.join(d, pattern)))
+        semillas_detectadas = 0
+        areas = []
+        for csv in csvs:
+            try:
+                df = pd.read_csv(csv)
+                semillas_detectadas += len(df)
+                if 'area_px' in df.columns:
+                    areas.extend(df['area_px'].values)
+            except Exception as e:
+                print(f"[ERROR] No se pudo leer {csv}: {e}")
+        exito = abs(semillas_detectadas - semillas_esperadas_por_carpeta) <= margen_exito
+        resumen.append({
+            "carpeta": os.path.basename(d),
+            "semillas_detectadas": semillas_detectadas,
+            "semillas_esperadas": semillas_esperadas_por_carpeta,
+            "diferencia": semillas_detectadas - semillas_esperadas_por_carpeta,
+            "exito": exito,
+            "area_media": np.mean(areas) if areas else np.nan,
+            "area_std": np.std(areas) if areas else np.nan,
+            "area_min": np.min(areas) if areas else np.nan,
+            "area_max": np.max(areas) if areas else np.nan,
+            "n_imgs": len(csvs)
+        })
+        total_detectadas += semillas_detectadas
+        total_esperadas += semillas_esperadas_por_carpeta
+        total_exitos += int(exito)
+        total_imgs += len(csvs)
+        areas_global.extend(areas)
+    print("\nReporte de rendimiento por carpeta:")
+    for r in resumen:
+        print(f"{r['carpeta']}: detectadas={r['semillas_detectadas']} | esperadas={r['semillas_esperadas']} | diferencia={r['diferencia']} | éxito={r['exito']} | área media={r['area_media']:.1f} ± {r['area_std']:.1f} | min={r['area_min']:.1f} | max={r['area_max']:.1f}")
+    print(f"\nTOTAL: detectadas={total_detectadas} | esperadas={total_esperadas} | diferencia={total_detectadas-total_esperadas}")
+    print(f"Tasa de éxito (carpetas con conteo correcto o margen ±{margen_exito}): {total_exitos}/{len(resumen)} = {100*total_exitos/max(1,len(resumen)):.1f}%")
+    if areas_global:
+        areas_global = np.array(areas_global)
+        q1, q3 = np.percentile(areas_global, [25, 75])
+        iqr = q3 - q1
+        outliers_bajos = (areas_global < (q1 - 1.5*iqr)).sum()
+        outliers_altos = (areas_global > (q3 + 1.5*iqr)).sum()
+        print(f"\nÁREA GLOBAL: media={areas_global.mean():.1f} ± {areas_global.std():.1f} | min={areas_global.min():.1f} | max={areas_global.max():.1f}")
+        print(f"Outliers de área: bajos={outliers_bajos} | altos={outliers_altos}")
+    return resumen
 # --------- Conteo de semillas por carpeta ---------
 import glob
 def resumen_conteo_semillas(dataset_dir, pattern="features_*.csv", semillas_esperadas_por_carpeta=10):
