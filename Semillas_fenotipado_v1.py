@@ -578,7 +578,7 @@ if __name__ == "__main__":
             roi_frac=1.10, roi_band_px=20,
             th_mode="hsv_adaptive",
             blockSize=51, C=0, adaptive_method="gaussian",
-            hsv_S_min=30, hsv_V_min=70, hsv_V_max=245,
+            hsv_S_min=28, hsv_V_min=90, hsv_V_max=245,
             fusion_mode="and",
             min_obj=2000, min_hole=800, closing_disk=0,
             save_crops=True,
@@ -586,7 +586,7 @@ if __name__ == "__main__":
         )
 
         if RUN_MODE == "image":
-            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060020\toma2.dng"
+            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060002\toma2.dng"
             df = process_image(
                 path=img_path,
                 save_overlay=os.path.splitext(img_path)[0] + "_overlay.png",
