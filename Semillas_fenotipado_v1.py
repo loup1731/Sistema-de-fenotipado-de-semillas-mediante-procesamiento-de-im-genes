@@ -586,7 +586,7 @@ if __name__ == "__main__":
         )
 
         if RUN_MODE == "image":
-            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060014\toma2.dng"
+            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060017\toma2.dng"
             df = process_image(
                 path=img_path,
                 save_overlay=os.path.splitext(img_path)[0] + "_overlay.png",
