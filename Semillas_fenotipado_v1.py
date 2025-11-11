@@ -274,6 +274,7 @@ def process_image(
     thickness_px=None, thickness_ratio=None,
     spot_sigma=2.0, spot_thresh=0.06,
     save_overlay=None, save_crops=False, crop_dir=None,
+    bounding_rect_margin=20,
     # ROI
     roi_frac=1.00, roi_band_px=20,
     # threshold opts
@@ -459,11 +460,10 @@ def process_image(
             cv2.drawContours(overlay, [box], 0, (0,255,255), 2)
             # Bounding rect (rectángulo alineado a ejes) expandido
             x_b, y_b, w_b, h_b = cv2.boundingRect(cnts[0])
-            margin = 10  # píxeles de margen extra
-            x0 = max(x_b - margin, 0)
-            y0 = max(y_b - margin, 0)
-            x1 = min(x_b + w_b + margin, overlay.shape[1])
-            y1 = min(y_b + h_b + margin, overlay.shape[0])
+            x0 = max(x_b - bounding_rect_margin, 0)
+            y0 = max(y_b - bounding_rect_margin, 0)
+            x1 = min(x_b + w_b + bounding_rect_margin, overlay.shape[1])
+            y1 = min(y_b + h_b + bounding_rect_margin, overlay.shape[0])
             cv2.rectangle(overlay, (x0, y0), (x1, y1), (255,128,0), 2)
         y, x = map(int, region.centroid)
         cv2.putText(overlay, f"#{i}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2, cv2.LINE_AA)
@@ -523,6 +523,7 @@ def process_dataset(dataset_dir, pattern="toma*.dng", **kw):
 
 # -------------- CLI --------------
 def parse_args():
+    p.add_argument("--bounding_rect_margin", type=int, default=20, help="Margen extra en píxeles para el bounding rect")
     p = argparse.ArgumentParser(description="Fenotipado de semillas (single/dataset). Unidades: píxeles.")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--image", type=str)
@@ -586,11 +587,11 @@ if __name__ == "__main__":
         )
 
         if RUN_MODE == "image":
-            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060017\toma2.dng"
+            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060017\toma1.dng"
             df = process_image(
                 path=img_path,
                 save_overlay=os.path.splitext(img_path)[0] + "_overlay.png",
-                crop_dir=os.path.join(os.path.dirname(img_path), "crops_toma2"),
+                crop_dir=os.path.join(os.path.dirname(img_path), "crops_toma1"),
                 **common_kw
             )
             out_csv = os.path.splitext(img_path)[0] + "_features.csv"
@@ -615,14 +616,15 @@ if __name__ == "__main__":
             fusion_mode=args.fusion_mode,
             min_obj=args.min_obj, min_hole=args.min_hole, closing_disk=args.closing_disk,
             save_crops=args.save_crops,
-            save_masks=args.save_masks, masks_dir=args.masks_dir
+            save_masks=args.save_masks, masks_dir=args.masks_dir,
+            bounding_rect_margin=args.bounding_rect_margin
         )
         if args.dataset_dir:
             process_dataset(dataset_dir=args.dataset_dir, pattern=args.pattern, **kw)
         else:
             df = process_image(path=args.image, save_overlay=args.save_overlay_single,
-                               crop_dir=os.path.join(os.path.dirname(args.image), "crops_single"),
-                               **kw)
+                                 crop_dir=os.path.join(os.path.dirname(args.image), "crops_single"),
+                                 **kw)
             out_csv = os.path.splitext(args.image)[0] + "_features.csv"
             df.to_csv(out_csv, index=False)
             print(f"OK. Semillas detectadas: {len(df)}")
