@@ -384,9 +384,19 @@ def process_image(
             c_px = (thickness_px if thickness_px is not None else thickness_ratio * min_px)
         volume_px3 = estimate_volume_ellipsoid(maj_px, min_px, c_px) if np.isfinite(c_px) else np.nan
 
+        # Convex hull métricas (área y perímetro)
+        convex_area_cv = np.nan
+        convex_perim_cv = np.nan
+        cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if cnts:
+            hull = cv2.convexHull(cnts[0])
+            convex_area_cv = cv2.contourArea(hull)
+            convex_perim_cv = cv2.arcLength(hull, True)
+
         rows.append({
             "seed_id": i,
             "area_px": float(area_px), "perimeter_px": float(perimeter_px),
+            "convex_area_cv": float(convex_area_cv), "convex_perimeter_cv": float(convex_perim_cv),
             "major_axis_px": float(maj_px), "minor_axis_px": float(min_px),
             "elongation_px": float(elongation), "circularity": float(circularity),
             "solidity": float(solidity), "convexity": float(convexity),
