@@ -1,3 +1,37 @@
+# --------- Conteo de semillas por carpeta ---------
+import glob
+def resumen_conteo_semillas(dataset_dir, pattern="features_*.csv", semillas_esperadas_por_carpeta=10):
+    """
+    Recorre las subcarpetas de dataset_dir, cuenta las semillas detectadas por carpeta
+    (sumando los registros de los CSV de features) y compara con el número esperado.
+    Imprime un resumen por carpeta y el total global.
+    """
+    subdirs = sorted([d for d in glob.glob(os.path.join(dataset_dir, "*")) if os.path.isdir(d)])
+    total_detectadas = 0
+    total_esperadas = 0
+    resumen = []
+    for d in subdirs:
+        csvs = sorted(glob.glob(os.path.join(d, pattern)))
+        semillas_detectadas = 0
+        for csv in csvs:
+            try:
+                df = pd.read_csv(csv)
+                semillas_detectadas += len(df)
+            except Exception as e:
+                print(f"[ERROR] No se pudo leer {csv}: {e}")
+        resumen.append({
+            "carpeta": os.path.basename(d),
+            "semillas_detectadas": semillas_detectadas,
+            "semillas_esperadas": semillas_esperadas_por_carpeta,
+            "diferencia": semillas_detectadas - semillas_esperadas_por_carpeta
+        })
+        total_detectadas += semillas_detectadas
+        total_esperadas += semillas_esperadas_por_carpeta
+    print("\nResumen de conteo de semillas por carpeta:")
+    for r in resumen:
+        print(f"{r['carpeta']}: detectadas={r['semillas_detectadas']} | esperadas={r['semillas_esperadas']} | diferencia={r['diferencia']}")
+    print(f"\nTOTAL: detectadas={total_detectadas} | esperadas={total_esperadas} | diferencia={total_detectadas-total_esperadas}")
+    return resumen
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
