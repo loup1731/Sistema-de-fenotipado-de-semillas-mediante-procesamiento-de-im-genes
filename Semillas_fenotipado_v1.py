@@ -468,10 +468,13 @@ def process_image(
         y, x = map(int, region.centroid)
         cv2.putText(overlay, f"#{i}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2, cv2.LINE_AA)
 
-        if save_crops and crop_dir:
-            ys, xs = np.where(seed_mask)
-            y0, y1 = max(ys.min()-5,0), min(ys.max()+6,h)
-            x0, x1 = max(xs.min()-5,0), min(xs.max()+6,w)
+        if save_crops and crop_dir and cnts:
+            # Usar el bounding rect expandido igual que en el overlay
+            x_b, y_b, w_b, h_b = cv2.boundingRect(cnts[0])
+            x0 = max(x_b - bounding_rect_margin, 0)
+            y0 = max(y_b - bounding_rect_margin, 0)
+            x1 = min(x_b + w_b + bounding_rect_margin, bgr.shape[1])
+            y1 = min(y_b + h_b + bounding_rect_margin, bgr.shape[0])
             crop = bgr[y0:y1, x0:x1]
             cv2.imwrite(os.path.join(crop_dir, f"seed_{i:02d}.png"), crop)
 
