@@ -580,7 +580,7 @@ if __name__ == "__main__":
             blockSize=71, C=-2, adaptive_method="gaussian",
             hsv_S_min=30, hsv_V_min=90, hsv_V_max=245,
             fusion_mode="and",
-            min_obj=4000, min_hole=1500, closing_disk=3,
+            min_obj=4000, min_hole=1500, closing_disk=5,
             save_crops=True,
             save_masks=True
         )
