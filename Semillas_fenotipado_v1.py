@@ -586,11 +586,11 @@ if __name__ == "__main__":
         )
 
         if RUN_MODE == "image":
-            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060002\toma2.dng"
+            img_path = r"E:\Tesis\Dataset_Domo_Semicircular_S_Agrosavia\10060005\toma1.dng"
             df = process_image(
                 path=img_path,
                 save_overlay=os.path.splitext(img_path)[0] + "_overlay.png",
-                crop_dir=os.path.join(os.path.dirname(img_path), "crops_toma2"),
+                crop_dir=os.path.join(os.path.dirname(img_path), "crops_toma1"),
                 **common_kw
             )
             out_csv = os.path.splitext(img_path)[0] + "_features.csv"
