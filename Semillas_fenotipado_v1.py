@@ -405,6 +405,14 @@ def process_image(
         if cnts:
             hull = cv2.convexHull(cnts[0])
             cv2.drawContours(overlay, [hull], -1, (255,0,255), 2)
+            # Mínimo rectángulo contenedor (rotado)
+            rect = cv2.minAreaRect(cnts[0])
+            box = cv2.boxPoints(rect)
+            box = np.intp(box)
+            cv2.drawContours(overlay, [box], 0, (0,255,255), 2)
+            # Bounding rect (rectángulo alineado a ejes)
+            x_b, y_b, w_b, h_b = cv2.boundingRect(cnts[0])
+            cv2.rectangle(overlay, (x_b, y_b), (x_b + w_b, y_b + h_b), (255,128,0), 2)
         y, x = map(int, region.centroid)
         cv2.putText(overlay, f"#{i}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2, cv2.LINE_AA)
 
