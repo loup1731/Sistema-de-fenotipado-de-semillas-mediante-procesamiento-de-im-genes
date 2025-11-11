@@ -397,9 +397,14 @@ def process_image(
             **color_feats, **tex_feats, **defect_feats
         })
 
+
         # overlay y crop
         cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(overlay, cnts, -1, (0,255,0), 2)
+        # Convex hull sobre el contorno principal
+        if cnts:
+            hull = cv2.convexHull(cnts[0])
+            cv2.drawContours(overlay, [hull], -1, (255,0,255), 2)
         y, x = map(int, region.centroid)
         cv2.putText(overlay, f"#{i}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2, cv2.LINE_AA)
 
