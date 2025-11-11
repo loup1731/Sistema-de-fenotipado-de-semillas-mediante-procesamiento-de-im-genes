@@ -384,19 +384,42 @@ def process_image(
             c_px = (thickness_px if thickness_px is not None else thickness_ratio * min_px)
         volume_px3 = estimate_volume_ellipsoid(maj_px, min_px, c_px) if np.isfinite(c_px) else np.nan
 
-        # Convex hull métricas (área y perímetro)
+
+        # Convex hull métricas (área, perímetro, ejes, circularidad, elongación, etc.)
         convex_area_cv = np.nan
         convex_perim_cv = np.nan
-        cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        maj_px_hull = np.nan
+        min_px_hull = np.nan
+        elongation_hull = np.nan
+        circularity_hull = np.nan
+        roundness_hull = np.nan
+        eccentricity_hull = np.nan
+        compactness_hull = np.nan
+        solidity_hull = np.nan
+        convexity_hull = np.nan
         if cnts:
             hull = cv2.convexHull(cnts[0])
             convex_area_cv = cv2.contourArea(hull)
             convex_perim_cv = cv2.arcLength(hull, True)
+            # Crear máscara del hull para análisis de ejes y otras métricas
+            hull_mask = np.zeros_like(seed_mask, dtype=np.uint8)
+            cv2.drawContours(hull_mask, [hull], -1, 1, -1)
+            props_hull = measure.regionprops(hull_mask)
+            if props_hull:
+                region_hull = props_hull[0]
+                maj_px_hull = region_hull.major_axis_length
+                min_px_hull = region_hull.minor_axis_length
+                elongation_hull = safe_div(maj_px_hull, min_px_hull)
+                circularity_hull = safe_div(4*np.pi*convex_area_cv, (convex_perim_cv**2))
+                roundness_hull = safe_div(4*convex_area_cv, (np.pi*(maj_px_hull**2)))
+                eccentricity_hull = region_hull.eccentricity
+                compactness_hull = safe_div(convex_area_cv, convex_area_cv)  # siempre 1
+                solidity_hull = 1.0  # por definición
+                convexity_hull = 1.0  # perímetro hull / perímetro hull
 
         rows.append({
             "seed_id": i,
             "area_px": float(area_px), "perimeter_px": float(perimeter_px),
-            "convex_area_cv": float(convex_area_cv), "convex_perimeter_cv": float(convex_perim_cv),
             "major_axis_px": float(maj_px), "minor_axis_px": float(min_px),
             "elongation_px": float(elongation), "circularity": float(circularity),
             "solidity": float(solidity), "convexity": float(convexity),
@@ -404,6 +427,18 @@ def process_image(
             "compactness_A_over_Aconvex": float(compactness),
             "symmetry_dice": float(symmetry_dice),
             "volume_px3": float(volume_px3),
+            # Métricas convex hull
+            "area_hull": float(convex_area_cv),
+            "perimeter_hull": float(convex_perim_cv),
+            "major_axis_hull": float(maj_px_hull),
+            "minor_axis_hull": float(min_px_hull),
+            "elongation_hull": float(elongation_hull),
+            "circularity_hull": float(circularity_hull),
+            "roundness_hull": float(roundness_hull),
+            "eccentricity_hull": float(eccentricity_hull),
+            "compactness_hull": float(compactness_hull),
+            "solidity_hull": float(solidity_hull),
+            "convexity_hull": float(convexity_hull),
             **color_feats, **tex_feats, **defect_feats
         })
 
