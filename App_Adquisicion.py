@@ -1,20 +1,21 @@
-#!/usr/bin/python3
 # ------------------------------------------------------------
-# IMX708 GUI + Modo OpenCV
-# - Preview RGB (fluido, evita pantalla negra)
-# - Manual: ExposureTime, AnalogueGain, LensPosition, WB
-# - Captura: carpeta base + subcarpeta + nombre libre + Tomar RAW (DNG)
-# - Modo OpenCV: trackbars (Exposure/Gain), histograma luminancia,
-#                guardar RAW TIFF (sin comprimir) con tecla 's'
-# - Hilos (QThread) para captura DNG y para vista OpenCV (no congela UI)
+# IMX708 GUI + Histograma (snapshot) en Qt (con post-callback)
+# - Preview RGB fluido con QGlPicamera2
+# - Control Manual: ExposureTime, AnalogueGain, LensPosition, WB
+# - Captura RAW (DNG) en hilo (no bloquea UI)
+# - Histograma "snapshot" (luminancia Y) en QLabel
+#   * Botón "Actualizar histograma"
+#   * Frame desde copia local (post-callback del preview)
+#   * Sin HighGUI / sin contención de buffers
 # ------------------------------------------------------------
 
 import os
 import re
 import time
+import threading
 import numpy as np
 
-# ---- opcionales para guardar TIFF RAW ----
+# (opcional) para guardar TIFF RAW en otro flujo si lo deseas
 try:
     import tifffile as tiff
     _HAS_TIFF = True
@@ -27,9 +28,9 @@ from PyQt5.QtCore import Qt, QUrl, QThread, QObject, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication, QHBoxLayout, QVBoxLayout, QLabel, QWidget, QScrollArea,
     QToolBox, QFrame, QFormLayout, QComboBox, QPushButton,
-    QDoubleSpinBox, QSpinBox, QLineEdit, QFileDialog
+    QDoubleSpinBox, QSpinBox, QLineEdit, QFileDialog, QSizePolicy
 )
-from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtGui import QDesktopServices, QImage, QPixmap
 
 from picamera2 import Picamera2
 from picamera2.previews.qt import QGlPicamera2
@@ -62,164 +63,17 @@ class RawCaptureWorker(QObject):
             self.failed.emit(str(e))
 
 
-# ========= Worker OpenCV: trackbars + hist + guardar TIFF RAW =========
-class OpenCVPreviewWorker(QObject):
-    finished = pyqtSignal()
-    failed   = pyqtSignal(str)
-
-    def __init__(self, picam2, get_effective_path, get_filename, get_current_controls):
-        """
-        get_effective_path(): str  -> carpeta destino actual
-        get_filename(): str        -> nombre base (sin extensión deseable)
-        get_current_controls(): dict -> {'ExposureTime':int,'AnalogueGain':float}
-        """
-        super().__init__()
-        self.picam2 = picam2
-        self.get_effective_path = get_effective_path
-        self.get_filename = get_filename
-        self.get_current_controls = get_current_controls
-
-    # --- helpers ---
-    def _ensure_dir(self, path):
-        try:
-            os.makedirs(path, exist_ok=True)
-        except Exception:
-            pass
-
-    def _build_tiff_path(self):
-        base = self.get_effective_path()
-        name = self.get_filename().strip() or f"raw_{int(time.time())}"
-        if not name.lower().endswith(".tiff") and not name.lower().endswith(".tif"):
-            name += ".tiff"
-        self._ensure_dir(base)
-        return os.path.join(base, name)
-
-    def _draw_hist(self, y_img):
-        # y_img: 8-bit luminance
-        hist = cv2.calcHist([y_img], [0], None, [256], [0, 256]).ravel()
-        hist = hist / (hist.max() + 1e-9)
-        H, W = 200, 256
-        canvas = np.full((H, W, 3), 255, np.uint8)
-        for x, v in enumerate(hist):
-            h = int(v * (H - 10))
-            cv2.line(canvas, (x, H-1), (x, H-1-h), (0, 0, 0), 1)
-        cv2.putText(canvas, "Hist Y", (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
-        return canvas
-
-    def _save_raw_tiff(self):
-        # Capturamos el buffer RAW (Bayer 10/12 -> np.uint16 normalmente)
-        req = None
-        try:
-            req = self.picam2.capture_request()
-            raw = req.make_array("raw")  # ndarray (altura, ancho) sin demosaico
-        finally:
-            if req is not None:
-                req.release()
-
-        if raw is None:
-            raise RuntimeError("No se pudo leer el buffer RAW para guardar TIFF.")
-
-        path = self._build_tiff_path()
-        if _HAS_TIFF:
-            # Guardar sin comprimir, manteniendo el mosaico Bayer
-            # Nota: photometric='cfa' marca el patrón CFA en el TIFF.
-            tiff.imwrite(path, raw, dtype=raw.dtype, photometric='cfa')
-        else:
-            # Fallback: guardar .npy para no perder datos
-            np.save(path.replace(".tiff", ".npy"), raw)
-
-        return path
-
-    def run(self):
-        try:
-            win = "OpenCV Live"
-            win_hist = "Histograma Y"
-            cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-            cv2.namedWindow(win_hist, cv2.WINDOW_NORMAL)
-
-            # Trackbars iniciales a partir de los controles actuales
-            current = self.get_current_controls()
-            init_exp = int(current.get("ExposureTime", 10000))
-            init_gain = float(current.get("AnalogueGain", 1.12))
-
-            # Escalas: exposición directamente en µs (hasta 1e6); ganancia *100
-            cv2.createTrackbar("Exposure (us)", win, max(10, min(1_000_000, init_exp)), 1_000_000, lambda v: None)
-            cv2.createTrackbar("Gain x100",     win, int(round(init_gain * 100)),        1600,        lambda v: None)
-
-            cv2.resizeWindow(win, 960, 540)
-            cv2.resizeWindow(win_hist, 400, 260)
-
-            while True:
-                # Leer trackbars
-                exp_us = cv2.getTrackbarPos("Exposure (us)", win)
-                gain_x100 = cv2.getTrackbarPos("Gain x100", win)
-                exp_us = max(10, int(exp_us))
-                gain = max(1.12, gain_x100 / 100.0)
-
-                # Aplicar controles (AE off)
-                try:
-                    controls = {"AeEnable": False, "ExposureTime": exp_us, "AnalogueGain": float(gain)}
-                    if exp_us > 20000:
-                        controls["FrameDurationLimits"] = (exp_us, exp_us)
-                    self.picam2.set_controls(controls)
-                except Exception:
-                    pass
-
-                # Capturar frame para preview/hist (RGB)
-                try:
-                    frame = self.picam2.capture_array()  # RGB frame
-                except Exception:
-                    # Pequeño retry si hubo switching
-                    time.sleep(0.01)
-                    continue
-
-                # Vista y luminancia
-                rgb = frame  # Picamera2 devuelve RGB por defecto
-                # Y de YCrCb (8 bits)
-                y = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)[:, :, 0]
-                hist_img = self._draw_hist(y)
-
-                # Mostrar
-                cv2.imshow(win, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-                cv2.imshow(win_hist, hist_img)
-
-                k = cv2.waitKey(1) & 0xFF
-                if k == ord('q') or k == 27:
-                    break
-                if k == ord('s'):
-                    # Guardar RAW como TIFF sin comprimir
-                    try:
-                        path = self._save_raw_tiff()
-                        print(f"[OpenCV] Guardado RAW TIFF: {path if _HAS_TIFF else path.replace('.tiff','.npy')}")
-                    except Exception as e:
-                        print(f"[OpenCV] Error guardando TIFF: {e}")
-
-                # Si la ventana se cierra con la X
-                if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
-                    break
-
-            cv2.destroyAllWindows()
-            self.finished.emit()
-
-        except Exception as e:
-            try:
-                cv2.destroyAllWindows()
-            except Exception:
-                pass
-            self.failed.emit(str(e))
-
-
 class PreviewWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("IMX708 - Manual + Captura RAW (DNG)")
+        self.setWindowTitle("IMX708 - Manual + Captura RAW (DNG) + Histograma (snapshot)")
         self.resize(1500, 900)
 
         # ===== Cámara y PREVIEW (RGB) =====
         self.picam2 = Picamera2()
         self.preview_config = self.picam2.create_preview_configuration(
-            main={"size": (1536, 864)},  # preview fluido y seguro
-            buffer_count=3
+            main={"size": (1536, 864)},
+            buffer_count=6
         )
         self.picam2.configure(self.preview_config)
 
@@ -231,15 +85,24 @@ class PreviewWindow(QWidget):
 
         self.qpicamera2 = QGlPicamera2(self.picam2, width=1280, height=720, keep_ar=True)
 
+        # --- buffer local del último frame (copiado desde el preview vía callback) ---
+        self._latest_rgb = None
+        self._frame_lock = threading.Lock()
+
         # ===== Panel lateral =====
-        self.side_panel = QFrame(); self.side_panel.setFrameShape(QFrame.StyledPanel); self.side_panel.setFixedWidth(460)
+        self.side_panel = QFrame()
+        self.side_panel.setFrameShape(QFrame.StyledPanel)
+        self.side_panel.setFixedWidth(460)
         panel_layout = QVBoxLayout(); panel_layout.setSpacing(8)
 
         title = QLabel("Panel de Control")
-        title.setAlignment(Qt.AlignCenter); title.setStyleSheet("font-weight:600; font-size:15pt;")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-weight:600; font-size:15pt;")
         panel_layout.addWidget(title)
 
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.toolbox = QToolBox()
         self.toolbox.setStyleSheet("""
@@ -286,39 +149,48 @@ class PreviewWindow(QWidget):
         self.btn_apply_manual.clicked.connect(self._apply_all_manual)
         self.cmb_wb_mode.currentTextChanged.connect(self._wb_ui_update)
 
-        # ================== Pestaña: OpenCV (preview+hist) ==================
-        self.page_cv = QWidget()
-        fl = QFormLayout(self.page_cv)
-        self.btn_cv_open = QPushButton("Abrir vista OpenCV (trackbars + histograma)")
-        self.lbl_cv_hint = QLabel("Teclas: 's' guardar RAW TIFF · 'q'/ESC salir")
-        self.lbl_cv_hint.setStyleSheet("color:#555;")
-        fl.addRow(self.btn_cv_open)
-        fl.addRow(self.lbl_cv_hint)
-        self.btn_cv_open.clicked.connect(self._open_opencv_worker)
+        # ================== Pestaña: Histograma (snapshot) ==================
+        self.page_hist = QWidget()
+        fh = QFormLayout(self.page_hist)
+
+        self.hist_label = QLabel("(Aún no se ha generado el histograma)")
+        self.hist_label.setAlignment(Qt.AlignCenter)
+        self.hist_label.setStyleSheet("background:#fafafa; border:1px solid #ddd;")
+        # *** tamaño fijo para evitar reescalados borrosos ***
+        self.hist_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._hist_w, self._hist_h = 360, 260
+        self.hist_label.setFixedSize(self._hist_w, self._hist_h)
+
+        self.btn_hist_update = QPushButton("Actualizar histograma")
+        self.lbl_hist_stats = QLabel("Estadísticos: —")
+        self.lbl_hist_stats.setStyleSheet("color:#555;")
+
+        fh.addRow(self.hist_label)
+        fh.addRow(self.btn_hist_update)
+        fh.addRow(self.lbl_hist_stats)
+
+        self.btn_hist_update.clicked.connect(self._update_histogram_snapshot)
 
         # ================== Pestaña: Captura ==================
         self.page_capture = QWidget()
         fc = QFormLayout(self.page_capture)
 
-        hb_base = QHBoxLayout()
         self.le_base = QLineEdit(); self.le_base.setPlaceholderText("Selecciona carpeta base…"); self.le_base.setReadOnly(True)
         self.btn_base = QPushButton("Seleccionar…")
-        hb_base.addWidget(self.le_base, 1); hb_base.addWidget(self.btn_base, 0)
+        hb_base = QHBoxLayout(); hb_base.addWidget(self.le_base, 1); hb_base.addWidget(self.btn_base, 0)
         fc.addRow("Carpeta base", hb_base)
 
-        hb_sub = QHBoxLayout()
         self.le_sub = QLineEdit(); self.le_sub.setPlaceholderText("Nombre de subcarpeta (opcional)")
         self.btn_sub_create = QPushButton("Crear")
-        hb_sub.addWidget(self.le_sub, 1); hb_sub.addWidget(self.btn_sub_create, 0)
+        hb_sub = QHBoxLayout(); hb_sub.addWidget(self.le_sub, 1); hb_sub.addWidget(self.btn_sub_create, 0)
         fc.addRow("Subcarpeta nueva", hb_sub)
 
-        hb_eff = QHBoxLayout()
         self.le_effective = QLineEdit(); self.le_effective.setReadOnly(True)
         self.btn_open = QPushButton("Abrir en explorador")
-        hb_eff.addWidget(self.le_effective, 1); hb_eff.addWidget(self.btn_open, 0)
+        hb_eff = QHBoxLayout(); hb_eff.addWidget(self.le_effective, 1); hb_eff.addWidget(self.btn_open, 0)
         fc.addRow("Destino efectivo", hb_eff)
 
-        self.le_filename = QLineEdit(); self.le_filename.setPlaceholderText("Nombre de archivo (sin o con .dng / .tiff)")
+        self.le_filename = QLineEdit(); self.le_filename.setPlaceholderText("Nombre de archivo (sin o con .dng)")
         fc.addRow("Nombre de archivo", self.le_filename)
 
         self.lbl_info_res = QLabel("Resolución RAW: 4608 × 2592 (SRGGB10)")
@@ -336,7 +208,7 @@ class PreviewWindow(QWidget):
 
         # Añadir páginas + barra de estado
         self.toolbox.addItem(self.page_manual,  "Control parámetros (Manual)")
-        self.toolbox.addItem(self.page_cv,      "Vista OpenCV (histograma)")
+        self.toolbox.addItem(self.page_hist,    "Histograma (snapshot)")
         self.toolbox.addItem(self.page_capture, "Captura (RAW DNG)")
 
         scroll.setWidget(self.toolbox)
@@ -360,11 +232,9 @@ class PreviewWindow(QWidget):
         self._soft_sync_control_limits()
         self._update_effective_path()
 
-        # Punteros de hilos
+        # Punteros de hilo de captura (sólo para DNG)
         self._cap_thread = None
         self._cap_worker = None
-        self._cv_thread = None
-        self._cv_worker = None
 
     # ---------- Utilidades ----------
     def _soft_sync_control_limits(self):
@@ -532,62 +402,166 @@ class PreviewWindow(QWidget):
         self.qpicamera2.update()
         self.btn_capture.setEnabled(True)
 
-    # ---------- OpenCV Worker launcher ----------
-    def _open_opencv_worker(self):
-        # Lanza la ventana OpenCV en hilo aparte
+    # ---------- Callback de preview: copia el frame 'main' ----------
+    def _frame_callback(self, request):
         try:
-            if self._cv_thread is not None:
-                self._set_status("Vista OpenCV ya está activa.")
-                return
+            arr = request.make_array("main")
+            if isinstance(arr, np.ndarray) and arr.size > 0:
+                with self._frame_lock:
+                    self._latest_rgb = arr.copy()
+        except Exception:
+            pass
 
-            # Helpers para que el worker use la ruta/nombre actuales
-            def _get_effective_path():
-                return self._effective_path() or os.path.expanduser("~/")
+    # ---------- Helpers de frame no bloqueante ----------
+    def _estimate_frame_timeout_ms(self) -> int:
+        try:
+            exp_us = int(self.spin_exp_us.value())
+            t_ms = int(max(30, min(500, 2 * (exp_us / 1000.0) + 30)))
+            return t_ms
+        except Exception:
+            return 120
 
-            def _get_filename():
-                return self.le_filename.text().strip() or "captura_raw"
+    def _grab_latest_frame(self) -> np.ndarray:
+        with self._frame_lock:
+            if isinstance(self._latest_rgb, np.ndarray) and self._latest_rgb.size > 0:
+                return self._latest_rgb.copy()
 
-            def _get_current_controls():
-                return {
-                    "ExposureTime": int(self.spin_exp_us.value()),
-                    "AnalogueGain": float(self.spin_gain.value())
-                }
+        timeout_ms = self._estimate_frame_timeout_ms()
+        attempts = 2
+        for _ in range(attempts):
+            req = None
+            try:
+                req = self.picam2.capture_request(timeout=timeout_ms)
+                if req is None:
+                    continue
+                try:
+                    arr = req.make_array("main")
+                except Exception:
+                    arr = req.make_array()
+                if isinstance(arr, np.ndarray) and arr.size > 0:
+                    return arr
+            except Exception:
+                pass
+            finally:
+                try:
+                    if req is not None:
+                        req.release()
+                except Exception:
+                    pass
+        return None
 
-            self._cv_thread = QThread()
-            self._cv_worker = OpenCVPreviewWorker(self.picam2, _get_effective_path, _get_filename, _get_current_controls)
-            self._cv_worker.moveToThread(self._cv_thread)
+    # ---------- Histograma (snapshot) ----------
+    def _update_histogram_snapshot(self):
+        frame = self._grab_latest_frame()
+        if frame is None:
+            self._set_status("No hay frame disponible todavía. Intenta de nuevo.")
+            return
+        try:
+            y = cv2.cvtColor(frame, cv2.COLOR_RGB2YCrCb)[:, :, 0]
+            y_min = int(np.min(y)); y_max = int(np.max(y))
+            y_mean = float(np.mean(y)); y_std = float(np.std(y))
 
-            self._cv_thread.started.connect(self._cv_worker.run)
-            self._cv_worker.finished.connect(self._on_cv_finished)
-            self._cv_worker.failed.connect(self._on_cv_failed)
+            # usar tamaño fijo del QLabel (sin reescalar)
+            hist_img_bgr = self._render_hist_image(y, width=self._hist_w, height=self._hist_h)
+            pix = self._np_bgr_to_qpixmap(hist_img_bgr)
+            self.hist_label.setPixmap(pix)
 
-            self._cv_worker.finished.connect(self._cv_thread.quit)
-            self._cv_worker.failed.connect(self._cv_thread.quit)
-            self._cv_worker.finished.connect(self._cv_worker.deleteLater)
-            self._cv_worker.failed.connect(self._cv_worker.deleteLater)
-            self._cv_thread.finished.connect(self._cv_thread.deleteLater)
-
-            self._cv_thread.start()
-            self._set_status("Vista OpenCV iniciada (teclas: s=guardar TIFF, q/ESC=salir).")
-
+            self.lbl_hist_stats.setText(
+                f"Estadísticos: min={y_min}  max={y_max}  media={y_mean:.1f}  std={y_std:.1f}"
+            )
+            self._set_status("Histograma actualizado.")
         except Exception as e:
-            self._set_status(f"Error iniciando vista OpenCV: {e}")
-            self._cv_thread = None
-            self._cv_worker = None
+            self._set_status(f"Error calculando histograma: {e}")
 
-    def _on_cv_finished(self):
-        self._set_status("Vista OpenCV cerrada.")
-        self._cv_thread = None
-        self._cv_worker = None
+    # ---------- Render del histograma con ejes/etiquetas (sin solapes) ----------
+    def _render_hist_image(self, y_img: np.ndarray, width=360, height=260) -> np.ndarray:
+        """
+        Histograma (256 bins) normalizado con ejes y etiquetas.
+        X: Intensidad (0-255). Y: Frecuencia relativa (0.0-1.0).
+        Dibuja 'Frecuencia relativa' en vertical para evitar solapes con el título.
+        """
+        hist = cv2.calcHist([y_img], [0], None, [256], [0, 256]).ravel()
+        hist = hist / np.max(hist) if np.max(hist) > 0 else hist
 
-    def _on_cv_failed(self, msg: str):
-        self._set_status(f"Vista OpenCV error: {msg}")
-        self._cv_thread = None
-        self._cv_worker = None
+        H, W = height, width
+        canvas = np.full((H, W, 3), 255, np.uint8)
+
+        # Márgenes amplios
+        left_margin, right_margin = 50, 28
+        top_margin, bottom_margin = 52, 48
+        usable_w = max(1, W - left_margin - right_margin)
+        usable_h = max(1, H - top_margin - bottom_margin)
+
+        # Ejes
+        x0, y0 = left_margin, H - bottom_margin
+        x1, y1 = W - right_margin, top_margin
+        cv2.line(canvas, (x0, y0), (x1, y0), (0, 0, 0), 1)  # X
+        cv2.line(canvas, (x0, y0), (x0, y1), (0, 0, 0), 1)  # Y
+
+        # Curva
+        xs = np.linspace(x0, x1 - 1, 256).astype(int)
+        ys = (y1 + usable_h - (hist * usable_h)).astype(int)
+        for i in range(1, 256):
+            cv2.line(canvas, (xs[i-1], ys[i-1]), (xs[i], ys[i]), (0, 0, 0), 2)
+
+        # Ticks Y (0.0, 0.5, 1.0)
+        for val in [0.0, 0.5, 1.0]:
+            y_pos = int(y1 + usable_h - (val * usable_h))
+            cv2.line(canvas, (x0 - 5, y_pos), (x0, y_pos), (0, 0, 0), 1)
+            cv2.putText(canvas, f"{val:.1f}", (8, y_pos + 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 0, 0), 1, cv2.LINE_AA)
+
+        # Ticks X (0, 128, 255)
+        for val, label in [(0, "0"), (128, "128"), (255, "255")]:
+            x_pos = int(x0 + (val / 255.0) * usable_w)
+            cv2.line(canvas, (x_pos, y0), (x_pos, y0 + 5), (0, 0, 0), 1)
+            cv2.putText(canvas, label, (x_pos - 10, y0 + 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 0, 0), 1, cv2.LINE_AA)
+
+        # Etiqueta X (centrada y baja para no pisar ticks)
+        cv2.putText(canvas, "Intensidad (0-255)",
+                    (x0 + (usable_w // 2) - 70, H - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 1, cv2.LINE_AA)
+
+        # Etiqueta Y vertical
+        label = "Frecuencia relativa"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        txt = np.full((th + 6, tw + 6, 3), 255, np.uint8)
+        cv2.putText(txt, label, (3, th + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+        txt = cv2.rotate(txt, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        thv, twv = txt.shape[:2]
+        y_top = y1 + (usable_h - thv) // 2
+        x_left = max(4, x0 - 35)
+        canvas[y_top:y_top + thv, x_left:x_left + twv] = txt
+
+        # Título centrado
+        title = "Histograma Y (snapshot)"
+        (tw, th), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 1)
+        cv2.putText(canvas, title, ((W - tw) // 2, 26),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 0, 0), 1, cv2.LINE_AA)
+
+        return canvas
+
+    def _np_bgr_to_qpixmap(self, img_bgr: np.ndarray) -> QPixmap:
+        if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
+            raise ValueError("Se esperaba imagen BGR de 3 canales.")
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        h, w, ch = img_rgb.shape
+        bytes_per_line = ch * w
+        qimg = QImage(img_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        return QPixmap.fromImage(qimg.copy())
 
     # ---------- Eventos ----------
     def showEvent(self, event):
         if not self._started:
+            try:
+                self.picam2.post_callback = self._frame_callback
+            except Exception:
+                try:
+                    self.picam2.set_post_callback(self._frame_callback)
+                except Exception:
+                    pass
+
             self.picam2.start()
             self.qpicamera2.update()
             try:
