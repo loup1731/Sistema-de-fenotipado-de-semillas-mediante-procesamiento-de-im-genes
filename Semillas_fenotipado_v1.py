@@ -83,6 +83,38 @@ def dice_coeff(a, b):
     inter = np.logical_and(a, b).sum()
     return safe_div(2.0 * inter, a.sum() + b.sum())
 
+def reg_metrics(y_ref, y_pred):
+    """
+    Métricas de comparación entre referencia (y_ref) y medida automática (y_pred):
+    - MAE: mean absolute error
+    - RMSE: root mean squared error
+    - R2: coeficiente de determinación
+    Ignora NaNs e infinitos.
+    """
+    y_ref = np.asarray(y_ref, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    mask = np.isfinite(y_ref) & np.isfinite(y_pred)
+    if mask.sum() == 0:
+        return dict(MAE=np.nan, RMSE=np.nan, R2=np.nan)
+
+    y_ref = y_ref[mask]
+    y_pred = y_pred[mask]
+
+    err = y_pred - y_ref
+    mae = float(np.mean(np.abs(err)))
+    rmse = float(np.sqrt(np.mean(err**2)))
+
+    denom = np.sum((y_ref - y_ref.mean())**2)
+    if denom == 0:
+        r2 = np.nan
+    else:
+        r2 = 1.0 - float(np.sum((y_ref - y_pred)**2) / denom)
+
+    return dict(MAE=mae, RMSE=rmse, R2=r2)
+
+
+
 def reflect_mask_over_major_axis(mask, region):
     rr, cc = np.nonzero(mask)
     coords = np.vstack((cc, rr, np.ones_like(rr))).astype(np.float32)
@@ -521,6 +553,24 @@ def process_image(
                 imageio.imwrite(tiff_path, crop_16, format='TIFF')
 
     df = pd.DataFrame(rows)
+    
+    # ===== Métricas de extracción de características (auto vs convex hull) =====
+    metrics_pairs = [
+        ("area_hull",        "area_px",        "area"),
+        ("perimeter_hull",   "perimeter_px",   "perimeter"),
+        ("major_axis_hull",  "major_axis_px",  "major_axis"),
+        ("minor_axis_hull",  "minor_axis_px",  "minor_axis"),
+    ]
+
+
+    for col_ref, col_auto, label in metrics_pairs: 
+        m = reg_metrics(df[col_ref].values, df[col_auto].values)
+        mae  = m["MAE"]
+        rmse = m["RMSE"]
+        r2   = m["R2"]
+        print(f"[Feat] {label:11s}  MAE={mae:.4f} px  RMSE={rmse:.4f} px  R²={r2:.4f}")
+
+     
     if save_overlay:
         cv2.imwrite(save_overlay, cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
     return df
