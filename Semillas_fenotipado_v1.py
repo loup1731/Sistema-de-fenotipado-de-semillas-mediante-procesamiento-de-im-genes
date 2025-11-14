@@ -270,6 +270,24 @@ def make_seed_mask(
 
 # -------------- Pipeline (en píxeles) --------------
 def process_image(
+        # --- Comparación automática con máscara convex hull (IoU y Dice) ---
+        # Generar máscara convex hull global
+        convex_ref = np.zeros_like(mask, dtype=np.uint8)
+        lab_ref, n_ref = ndi.label(mask)
+        for i in range(1, n_ref+1):
+            seed_mask = (lab_ref == i)
+            cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if cnts:
+                hull = cv2.convexHull(cnts[0])
+                cv2.drawContours(convex_ref, [hull], -1, 1, -1)
+        # Calcular métricas
+        mask_bin = mask.astype(bool)
+        convex_bin = convex_ref.astype(bool)
+        intersection = np.logical_and(mask_bin, convex_bin).sum()
+        union = np.logical_or(mask_bin, convex_bin).sum()
+        iou = intersection / union if union > 0 else float('nan')
+        dice = (2 * intersection) / (mask_bin.sum() + convex_bin.sum()) if (mask_bin.sum() + convex_bin.sum()) > 0 else float('nan')
+        print(f"[Métricas vs. Convex Hull] IoU: {iou:.4f} | Dice: {dice:.4f}")
     path,
     thickness_px=None, thickness_ratio=None,
     spot_sigma=2.0, spot_thresh=0.06,
@@ -309,6 +327,7 @@ def process_image(
     )
     mask &= core_mask
 
+
     # guardar máscaras de debug y referencia convex hull
     if save_masks:
         folder = os.path.dirname(path)
@@ -328,6 +347,25 @@ def process_image(
                 hull = cv2.convexHull(cnts[0])
                 cv2.drawContours(convex_ref, [hull], -1, 255, -1)
         cv2.imwrite(os.path.join(outdir, "mask_convex_reference.png"), convex_ref)
+
+    # --- Comparación automática con máscara convex hull (IoU y Dice) ---
+    # Generar máscara convex hull global (binaria)
+    convex_ref_bin = np.zeros_like(mask, dtype=np.uint8)
+    lab_ref, n_ref = ndi.label(mask)
+    for i in range(1, n_ref+1):
+        seed_mask = (lab_ref == i)
+        cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if cnts:
+            hull = cv2.convexHull(cnts[0])
+            cv2.drawContours(convex_ref_bin, [hull], -1, 1, -1)
+    # Calcular métricas
+    mask_bin = mask.astype(bool)
+    convex_bin = convex_ref_bin.astype(bool)
+    intersection = np.logical_and(mask_bin, convex_bin).sum()
+    union = np.logical_or(mask_bin, convex_bin).sum()
+    iou = intersection / union if union > 0 else float('nan')
+    dice = (2 * intersection) / (mask_bin.sum() + convex_bin.sum()) if (mask_bin.sum() + convex_bin.sum()) > 0 else float('nan')
+    print(f"[Métricas vs. Convex Hull] IoU: {iou:.4f} | Dice: {dice:.4f}")
 
     # etiquetado
     lab, n = ndi.label(mask)
