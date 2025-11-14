@@ -307,27 +307,51 @@ def process_image(
         min_obj=min_obj, min_hole=min_hole, closing_disk=closing_disk,
         return_debug=True
     )
+    # Limitar al “core” del domo
     mask &= core_mask
 
-    # guardar máscaras de debug y referencia convex hull
+    # ---------- MÁSCARA DE REFERENCIA (CONVEX HULL GLOBAL) ----------
+    # Para cada semilla etiquetada, sacamos su convex hull y los unimos
+    convex_ref = np.zeros_like(mask, dtype=np.uint8)
+    lab_ref, n_ref = ndi.label(mask)
+    for lbl in range(1, n_ref + 1):
+        seed_mask_ref = (lab_ref == lbl)
+        cnts, _ = cv2.findContours(
+            seed_mask_ref.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not cnts:
+            continue
+        hull = cv2.convexHull(cnts[0])
+        cv2.drawContours(convex_ref, [hull], -1, 1, -1)  # 1 = “on” en la máscara
+
+    # ---------- MÉTRICAS GLOBALES DE SEGMENTACIÓN ----------
+    mask_bin   = mask.astype(bool)
+    convex_bin = convex_ref.astype(bool)
+
+    inter = np.logical_and(mask_bin, convex_bin).sum()
+    union = np.logical_or(mask_bin, convex_bin).sum()
+    iou_global  = inter / union if union > 0 else float("nan")
+    dice_global = dice_coeff(mask_bin, convex_bin)
+
+    print(f"[Segm] IoU global vs convex hull: {iou_global:.4f} | Dice: {dice_global:.4f}")
+
+    # ---------- GUARDAR MÁSCARAS DE DEBUG ----------
     if save_masks:
         folder = os.path.dirname(path)
         base   = os.path.splitext(os.path.basename(path))[0]
         outdir = masks_dir if masks_dir else os.path.join(folder, f"masks_{base}")
         _ensure_dir(outdir)
+
         cv2.imwrite(os.path.join(outdir, "01_mask_hsv.png"),   dbg["mask_hsv"])
         cv2.imwrite(os.path.join(outdir, "02_mask_adapt.png"), dbg["mask_adapt"])
         cv2.imwrite(os.path.join(outdir, "03_mask_final.png"), dbg["mask_final"])
-        # Máscara de referencia convex hull (por semilla)
-        convex_ref = np.zeros_like(mask, dtype=np.uint8)
-        lab, n = ndi.label(mask)
-        for i in range(1, n+1):
-            seed_mask = (lab == i)
-            cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if cnts:
-                hull = cv2.convexHull(cnts[0])
-                cv2.drawContours(convex_ref, [hull], -1, 255, -1)
-        cv2.imwrite(os.path.join(outdir, "mask_convex_reference.png"), convex_ref)
+        cv2.imwrite(
+            os.path.join(outdir, "04_mask_convex_ref.png"),
+            (convex_ref.astype(np.uint8) * 255)
+        )
+
 
     # etiquetado
     lab, n = ndi.label(mask)
@@ -395,10 +419,9 @@ def process_image(
             c_px = (thickness_px if thickness_px is not None else thickness_ratio * min_px)
         volume_px3 = estimate_volume_ellipsoid(maj_px, min_px, c_px) if np.isfinite(c_px) else np.nan
 
-
-
-        # Encontrar contornos antes de usar cnts
-        cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Encontrar contornos para hull y rectángulos
+        cnts, _ = cv2.findContours(seed_mask.astype(np.uint8),
+                                   cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         convex_area_cv = np.nan
         convex_perim_cv = np.nan
         maj_px_hull = np.nan
@@ -410,11 +433,11 @@ def process_image(
         compactness_hull = np.nan
         solidity_hull = np.nan
         convexity_hull = np.nan
+
         if cnts:
             hull = cv2.convexHull(cnts[0])
             convex_area_cv = cv2.contourArea(hull)
             convex_perim_cv = cv2.arcLength(hull, True)
-            # Crear máscara del hull para análisis de ejes y otras métricas
             hull_mask = np.zeros_like(seed_mask, dtype=np.uint8)
             cv2.drawContours(hull_mask, [hull], -1, 1, -1)
             props_hull = measure.regionprops(hull_mask)
@@ -426,9 +449,9 @@ def process_image(
                 circularity_hull = safe_div(4*np.pi*convex_area_cv, (convex_perim_cv**2))
                 roundness_hull = safe_div(4*convex_area_cv, (np.pi*(maj_px_hull**2)))
                 eccentricity_hull = region_hull.eccentricity
-                compactness_hull = safe_div(convex_area_cv, convex_area_cv)  # siempre 1
-                solidity_hull = 1.0  # por definición
-                convexity_hull = 1.0  # perímetro hull / perímetro hull
+                compactness_hull = 1.0
+                solidity_hull = 1.0
+                convexity_hull = 1.0
 
         rows.append({
             "seed_id": i,
@@ -455,12 +478,10 @@ def process_image(
             **color_feats, **tex_feats, **defect_feats
         })
 
-
         # overlay y crop
-        cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(overlay, cnts, -1, (0,255,0), 2)
-        # Convex hull sobre el contorno principal
         if cnts:
+            cv2.drawContours(overlay, cnts, -1, (0,255,0), 2)
+            # Convex hull sobre el contorno principal
             hull = cv2.convexHull(cnts[0])
             cv2.drawContours(overlay, [hull], -1, (255,0,255), 2)
             # Mínimo rectángulo contenedor (rotado)
@@ -468,15 +489,17 @@ def process_image(
             box = cv2.boxPoints(rect)
             box = np.intp(box)
             cv2.drawContours(overlay, [box], 0, (0,255,255), 2)
-            # Bounding rect (rectángulo alineado a ejes) expandido
+            # Bounding rect (alineado a ejes) expandido
             x_b, y_b, w_b, h_b = cv2.boundingRect(cnts[0])
             x0 = max(x_b - bounding_rect_margin, 0)
             y0 = max(y_b - bounding_rect_margin, 0)
             x1 = min(x_b + w_b + bounding_rect_margin, overlay.shape[1])
             y1 = min(y_b + h_b + bounding_rect_margin, overlay.shape[0])
             cv2.rectangle(overlay, (x0, y0), (x1, y1), (255,128,0), 2)
+
         y, x = map(int, region.centroid)
-        cv2.putText(overlay, f"#{i}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2, cv2.LINE_AA)
+        cv2.putText(overlay, f"#{i}", (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (255,0,0), 2, cv2.LINE_AA)
 
         if save_crops and crop_dir and cnts:
             # Usar el bounding rect expandido igual que en el overlay
@@ -488,14 +511,13 @@ def process_image(
             crop = bgr[y0:y1, x0:x1]
             # Guardar como PNG (8 bits)
             cv2.imwrite(os.path.join(crop_dir, f"seed_{i:02d}.png"), crop)
-            # Guardar como TIFF 16-bit sin compresión (o LZW si se puede)
+            # Guardar como TIFF 16-bit
             import imageio
-            crop_16 = np.left_shift(crop.astype(np.uint16), 8)  # Escalar 8->16 bits
+            crop_16 = np.left_shift(crop.astype(np.uint16), 8)
             tiff_path = os.path.join(crop_dir, f"seed_{i:02d}.tiff")
             try:
                 imageio.imwrite(tiff_path, crop_16, format='TIFF', compression='none')
             except TypeError:
-                # Si 'compression' no es soportado, guardar sin ese argumento
                 imageio.imwrite(tiff_path, crop_16, format='TIFF')
 
     df = pd.DataFrame(rows)
@@ -546,7 +568,6 @@ def process_dataset(dataset_dir, pattern="toma*.dng", **kw):
 
 # -------------- CLI --------------
 def parse_args():
-    p.add_argument("--bounding_rect_margin", type=int, default=20, help="Margen extra en píxeles para el bounding rect")
     p = argparse.ArgumentParser(description="Fenotipado de semillas (single/dataset). Unidades: píxeles.")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--image", type=str)
@@ -577,6 +598,8 @@ def parse_args():
     p.add_argument("--min_obj", type=int, default=-1)
     p.add_argument("--min_hole", type=int, default=-1)
     p.add_argument("--closing_disk", type=int, default=0)
+    p.add_argument("--bounding_rect_margin", type=int, default=20,
+                   help="Margen extra en píxeles para el bounding rect")
 
     # debug masks
     p.add_argument("--save_masks", action="store_true")
@@ -606,7 +629,8 @@ if __name__ == "__main__":
             fusion_mode="and",
             min_obj=4000, min_hole=1500, closing_disk=5,
             save_crops=True,
-            save_masks=True
+            save_masks=True,
+            bounding_rect_margin=20
         )
 
         if RUN_MODE == "image":
@@ -646,8 +670,8 @@ if __name__ == "__main__":
             process_dataset(dataset_dir=args.dataset_dir, pattern=args.pattern, **kw)
         else:
             df = process_image(path=args.image, save_overlay=args.save_overlay_single,
-                                 crop_dir=os.path.join(os.path.dirname(args.image), "crops_single"),
-                                 **kw)
+                               crop_dir=os.path.join(os.path.dirname(args.image), "crops_single"),
+                               **kw)
             out_csv = os.path.splitext(args.image)[0] + "_features.csv"
             df.to_csv(out_csv, index=False)
             print(f"OK. Semillas detectadas: {len(df)}")
