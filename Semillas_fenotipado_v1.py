@@ -309,7 +309,7 @@ def process_image(
     )
     mask &= core_mask
 
-    # guardar máscaras de debug
+    # guardar máscaras de debug y referencia convex hull
     if save_masks:
         folder = os.path.dirname(path)
         base   = os.path.splitext(os.path.basename(path))[0]
@@ -318,6 +318,16 @@ def process_image(
         cv2.imwrite(os.path.join(outdir, "01_mask_hsv.png"),   dbg["mask_hsv"])
         cv2.imwrite(os.path.join(outdir, "02_mask_adapt.png"), dbg["mask_adapt"])
         cv2.imwrite(os.path.join(outdir, "03_mask_final.png"), dbg["mask_final"])
+        # Máscara de referencia convex hull (por semilla)
+        convex_ref = np.zeros_like(mask, dtype=np.uint8)
+        lab, n = ndi.label(mask)
+        for i in range(1, n+1):
+            seed_mask = (lab == i)
+            cnts, _ = cv2.findContours(seed_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if cnts:
+                hull = cv2.convexHull(cnts[0])
+                cv2.drawContours(convex_ref, [hull], -1, 255, -1)
+        cv2.imwrite(os.path.join(outdir, "mask_convex_reference.png"), convex_ref)
 
     # etiquetado
     lab, n = ndi.label(mask)
