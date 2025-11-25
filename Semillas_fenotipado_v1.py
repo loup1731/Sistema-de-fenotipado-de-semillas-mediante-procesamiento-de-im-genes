@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Fenotipado de semillas (1–5 semillas, fondo blanco)
-- Unidades: PIXELES.
+- Unidades base: PIXELES (con conversión opcional a mm).
 - SINGLE y DATASET.
 - Umbralización: Otsu, Adaptativa (mean/gaussian), Regla HSV, o HSV+Adaptativa.
 - Debug: guarda mask_hsv, mask_adapt y mask_final por imagen.
@@ -30,6 +30,21 @@ except Exception:
     rawpy = None
 
 RAW_EXTS = {".dng",".nef",".cr2",".cr3",".arw",".rw2",".orf",".raf",".srw",".pef"}
+
+# ---------------- Calibración geométrica px↔mm ----------------
+# Factores obtenidos experimentalmente a partir de patrones (monedas 1000 y 500 COP).
+# Diámetros reales medidos con pie de rey vs. 'major_axis_px' del algoritmo.
+MM_PER_PX_1000 = 26.59 / 793.9239668610118     # moneda 1000 COP
+MM_PER_PX_500  = 23.64 / 715.5357268296175     # moneda 500 COP
+
+MM_PER_PX = (MM_PER_PX_1000 + MM_PER_PX_500) / 2.0
+PX_PER_MM = 1.0 / MM_PER_PX
+
+# Mensaje de validación visible en terminal / consola
+print(f"[Calib] MM_PER_PX_1000={MM_PER_PX_1000:.6f} mm/px | "
+      f"MM_PER_PX_500={MM_PER_PX_500:.6f} mm/px")
+print(f"[Calib] Factor geométrico final: {MM_PER_PX:.6f} mm/px  "
+      f"(~{PX_PER_MM:.3f} px/mm)")
 
 def _read_image_any(path):
     if not os.path.exists(path):
@@ -300,7 +315,7 @@ def make_seed_mask(
         return mask, dbg
     return mask
 
-# -------------- Pipeline (en píxeles) --------------
+# -------------- Pipeline (en píxeles + conversión a mm) --------------
 def process_image(
     path,
     thickness_px=None, thickness_ratio=None,
@@ -318,6 +333,9 @@ def process_image(
     # debug masks
     save_masks=False, masks_dir=None
 ):
+    # Recordatorio de la calibración usada en esta corrida
+    print(f"[Calib] Usando MM_PER_PX={MM_PER_PX:.6f} mm/px (~{PX_PER_MM:.3f} px/mm)")
+
     bgr = _read_image_any(path)
     h, w = bgr.shape[:2]
 
@@ -553,7 +571,21 @@ def process_image(
                 imageio.imwrite(tiff_path, crop_16, format='TIFF')
 
     df = pd.DataFrame(rows)
-    
+
+    # ===== Conversión de pixeles → unidades físicas (mm, mm², mm³) =====
+    if np.isfinite(MM_PER_PX):
+        df["major_axis_mm"] = df["major_axis_px"] * MM_PER_PX
+        df["minor_axis_mm"] = df["minor_axis_px"] * MM_PER_PX
+        df["perimeter_mm"]  = df["perimeter_px"]  * MM_PER_PX
+        df["equivalent_diameter_mm"] = np.sqrt(
+            4.0 * df["area_px"] * (MM_PER_PX ** 2) / np.pi
+        )
+        df["area_mm2"]   = df["area_px"]   * (MM_PER_PX ** 2)
+        df["volume_mm3"] = df["volume_px3"] * (MM_PER_PX ** 3)
+        df["calibration_mm_per_px"] = MM_PER_PX
+    else:
+        print("[WARN] MM_PER_PX no definido o no finito; se omite conversión a unidades físicas.")
+
     # ===== Métricas de extracción de características (auto vs convex hull) =====
     metrics_pairs = [
         ("area_hull",        "area_px",        "area"),
@@ -618,7 +650,7 @@ def process_dataset(dataset_dir, pattern="toma*.dng", **kw):
 
 # -------------- CLI --------------
 def parse_args():
-    p = argparse.ArgumentParser(description="Fenotipado de semillas (single/dataset). Unidades: píxeles.")
+    p = argparse.ArgumentParser(description="Fenotipado de semillas (single/dataset). Unidades: píxeles + mm.")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--image", type=str)
     mode.add_argument("--dataset_dir", type=str)
