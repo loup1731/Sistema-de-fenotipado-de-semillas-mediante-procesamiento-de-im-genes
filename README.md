@@ -96,7 +96,3 @@ python Semillas_fenotipado_v1.py --dataset_dir <ruta_carpeta>
 
 Las contribuciones son bienvenidas. Por favor, abre un issue o pull request para sugerencias o mejoras.
 
-## 📄 Licencia
-
-[MIT License](LICENSE)
-
