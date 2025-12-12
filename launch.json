@@ -1,0 +1,85 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Fenotipado | Imagen individual (DNG)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/Semillas_fenotipado_v1.py",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": [
+        "--image",
+        "E:\\Tesis\\Pruebas_calibracion\\Pruebas_calibracion\\moneda1000_1_9600us.dng",
+
+        "--thickness_px", "60",
+        "--spot_sigma", "2.0",
+        "--spot_thresh", "0.06",
+
+        "--roi_frac", "1.10",
+        "--roi_band_px", "20",
+
+        "--th_mode", "hsv_adaptive",
+        "--blockSize", "71",
+        "--C", "-2",
+        "--adaptive_method", "gaussian",
+
+        "--hsv_S_min", "30",
+        "--hsv_V_min", "90",
+        "--hsv_V_max", "245",
+
+        "--fusion_mode", "and",
+
+        "--min_obj", "4000",
+        "--min_hole", "1500",
+        "--closing_disk", "5",
+
+        "--save_crops",
+        "--save_masks",
+
+        "--bounding_rect_margin", "20"
+      ]
+    },
+    {
+      "name": "Fenotipado | Dataset completo",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/Semillas_fenotipado_v1.py",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": [
+        "--dataset_dir",
+        "E:\\Tesis\\Dataset_Domo_Semicircular_S_Agrosavia",
+        "--pattern", "toma*.dng",
+
+        "--thickness_px", "60",
+
+        "--spot_sigma", "2.0",
+        "--spot_thresh", "0.06",
+
+        "--roi_frac", "1.10",
+        "--roi_band_px", "20",
+
+        "--th_mode", "hsv_adaptive",
+        "--blockSize", "71",
+        "--C", "-2",
+        "--adaptive_method", "gaussian",
+
+        "--hsv_S_min", "30",
+        "--hsv_V_min", "90",
+        "--hsv_V_max", "245",
+
+        "--fusion_mode", "and",
+
+        "--min_obj", "4000",
+        "--min_hole", "1500",
+        "--closing_disk", "5",
+
+        "--save_crops",
+        "--save_masks",
+
+        "--bounding_rect_margin", "20"
+      ]
+    }
+  ]
+}
